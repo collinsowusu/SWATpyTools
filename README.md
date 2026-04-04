@@ -562,28 +562,6 @@ to_netcdf(
 )
 ```
 
----
-
-## Project Layout
-
-```
-SWAT_LU_Updates/
-├── ArcSWAT_Project/
-│   ├── Watershed/
-│   │   ├── Grid/          DEM, HRU, soil, slope rasters
-│   │   ├── Shapes/        HRU and subbasin shapefiles
-│   │   └── text/          HRULandUseSoilsReport.txt
-│   └── Scenarios/Default/TxtInOut/    SWAT input/output files
-├── Landuse_Rasters/        Multi-temporal NLCD rasters
-├── Tables/
-│   └── luc.txt             NLCD → SWAT land use code lookup
-├── swatpytools/              This package
-├── Old_Scripts/            Original SWATProcessor_v3.py (superseded)
-└── output/                 Generated LUC files (lup.dat, file1.dat, file2.dat)
-```
-
----
-
 ## Notes on SWAT Output Formats
 
 ### `output.rch` column alignment
