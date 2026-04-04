@@ -139,8 +139,7 @@ results = run_luc(config)
 
 #### Enabling LUC in SWAT
 
-After generating the output files, copy them to `TxtInOut/` and set
-`ICALEN = 1` in `basins.bsn`. The `lup.dat` must reference the correct
+After generating the output files, copy them to `TxtInOut/`. The `lup.dat` must reference the correct
 filenames (`file1.dat`, `file2.dat`, …).
 
 ---
