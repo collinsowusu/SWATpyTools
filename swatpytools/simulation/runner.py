@@ -229,9 +229,22 @@ def run_simulations(
 
     run_results: list[dict[str, Any]] = []
 
+    completed = 0
+    total = len(pending)
+
+    # Submit in rolling batches of max_workers so that only n_workers TxtInOut
+    # copies exist on disk simultaneously.  Submitting all futures at once would
+    # queue copytree for every simulation before any run completes, wasting disk
+    # space proportional to n_simulations instead of n_workers.
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
-        futures = {
-            executor.submit(
+        pending_iter = iter(pending)
+        active: dict = {}
+
+        def _submit_next() -> None:
+            sim_id = next(pending_iter, None)
+            if sim_id is None:
+                return
+            f = executor.submit(
                 _run_one,
                 sim_id=sim_id,
                 sample_row=samples.loc[sim_id].to_dict(),
@@ -243,27 +256,33 @@ def run_simulations(
                 parameters_dicts=params_dicts,
                 delete_run_dir=config.delete_run_dirs,
                 timeout=config.timeout,
-            ): sim_id
-            for sim_id in pending
-        }
-
-        completed = 0
-        total = len(pending)
-        for future in as_completed(futures):
-            result = future.result()
-            run_results.append(result)
-            completed += 1
-            status_flag = "✓" if result["status"] == "completed" else "✗"
-            logger.info(
-                "[%d/%d] sim_%04d %s %s (%.1fs)%s",
-                completed,
-                total,
-                result["sim_id"],
-                status_flag,
-                result["status"],
-                result["duration_s"],
-                f" — {result['error']}" if result["error"] else "",
             )
+            active[f] = sim_id
+
+        # Fill the pool initially
+        for _ in range(n_workers):
+            _submit_next()
+
+        while active:
+            for future in as_completed(active):
+                result = future.result()
+                del active[future]
+                run_results.append(result)
+                completed += 1
+                status_flag = "✓" if result["status"] == "completed" else "✗"
+                logger.info(
+                    "[%d/%d] sim_%04d %s %s (%.1fs)%s",
+                    completed,
+                    total,
+                    result["sim_id"],
+                    status_flag,
+                    result["status"],
+                    result["duration_s"],
+                    f" — {result['error']}" if result["error"] else "",
+                )
+                # Submit the next pending sim as soon as a slot opens
+                _submit_next()
+                break  # re-enter as_completed with updated active dict
 
     # ---- Append to run log -----------------------------------------------
     _append_run_log(run_results, config.results_dir / "run_log.csv")
