@@ -37,7 +37,7 @@ The package is used directly from the repository root (no `pip install` required
 
 ```python
 import sys
-sys.path.insert(0, "/path/to/SWAT_LU_Updates")
+sys.path.insert(0, "/path/to/SWATpyTools")
 import swatpytools
 ```
 
