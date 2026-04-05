@@ -21,8 +21,7 @@ A Python toolkit for preparing inputs, post-processing outputs, and calibrating
    - [swatpytools.viz — Visualization](#swatpytoolsviz--visualization)
    - [swatpytools.inputs — Input Preparation](#swatpytoolsinputs--input-preparation)
 4. [Quick-Start Examples](#quick-start-examples)
-5. [Project Layout](#project-layout)
-6. [Notes on SWAT Output Formats](#notes-on-swat-output-formats)
+5. [Notes on SWAT Output Formats](#notes-on-swat-output-formats)
 
 ---
 
