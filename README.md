@@ -3,7 +3,7 @@
 A Python toolkit for preparing inputs, post-processing outputs, and calibrating
 [SWAT](https://swat.tamu.edu/) (Soil and Water Assessment Tool) watershed models.
 
-**Version:** 0.2.0  
+**Version:** 0.3.0  
 **SWAT version tested against:** SWAT Dec 19, Ver 2022/Rev 687  
 **Python:** 3.10+
 
@@ -15,6 +15,7 @@ A Python toolkit for preparing inputs, post-processing outputs, and calibrating
 2. [Package Structure](#package-structure)
 3. [Module Reference](#module-reference)
    - [swatpytools.luc — Land Use Change](#swatpytoolsluc--land-use-change)
+   - [swatpytools.simulation — Multi-Simulation Runner](#swatpytoolssimulation--multi-simulation-runner)
    - [swatpytools.outputs — Output Readers](#swatpytoolsoutputs--output-readers)
    - [swatpytools.metrics — Performance Metrics](#swatpytoolsmetrics--performance-metrics)
    - [swatpytools.viz — Visualization](#swatpytoolsviz--visualization)
@@ -37,7 +38,7 @@ The package is used directly from the repository root (no `pip install` required
 
 ```python
 import sys
-sys.path.insert(0, "/path/to/SWATpyTools")
+sys.path.insert(0, "/path/to/SWAT_LU_Updates")
 import swatpytools
 ```
 
@@ -48,6 +49,7 @@ import swatpytools
 ```
 swatpytools/
 ├── luc/          Land Use Change file generator (Pai & Saraswat 2011)
+├── simulation/   LHS sampling + parallel multi-simulation ensemble runner
 ├── outputs/      SWAT output readers + NetCDF exporter
 ├── metrics/      Model performance metrics (NSE, KGE, PBIAS, RMSE, …)
 ├── viz/          Interactive Plotly visualizations
@@ -75,12 +77,12 @@ in the simulation without redefining soils or slopes.
 
 #### Spatial methods
 
-| Method | Description | When to use |
-|---|---|---|
-| `raster` *(default)* | Pixel-level overlay of NLCD with HRU/soil/slope rasters | Preferred — faithful to Pai & Saraswat (2011) |
-| `shapefile` | Zonal statistics using HRU polygon boundaries | Fallback when raster grids are missing |
-| `auto` | Selects `raster` if grids exist, else `shapefile` | Default when no `--method` is given |
-| `both` | Runs both methods and writes a comparison CSV | Useful for validation |
+| Method               | Description                                             | When to use                                   |
+| -------------------- | ------------------------------------------------------- | --------------------------------------------- |
+| `raster` _(default)_ | Pixel-level overlay of NLCD with HRU/soil/slope rasters | Preferred — faithful to Pai & Saraswat (2011) |
+| `shapefile`          | Zonal statistics using HRU polygon boundaries           | Fallback when raster grids are missing        |
+| `auto`               | Selects `raster` if grids exist, else `shapefile`       | Default when no `--method` is given           |
+| `both`               | Runs both methods and writes a comparison CSV           | Useful for validation                         |
 
 #### CLI usage
 
@@ -95,14 +97,14 @@ python -m swatpytools.luc \
 
 Options:
 
-| Flag | Default | Description |
-|---|---|---|
-| `--project-dir` | *(required)* | ArcSWAT project root (contains `Watershed/`, `Scenarios/`) |
-| `--update` | *(required, repeatable)* | `YEAR MONTH DAY /path/to/nlcd.tif` |
-| `--lookup-table` | auto-detected | NLCD code → SWAT code mapping (`luc.txt`) |
-| `--output-dir` | `../output` | Where to write `lup.dat` and `fileN.dat` |
-| `--method` | `auto` | `auto`, `raster`, `shapefile`, or `both` |
-| `--verbose` / `-v` | off | Enable DEBUG logging |
+| Flag               | Default                  | Description                                                |
+| ------------------ | ------------------------ | ---------------------------------------------------------- |
+| `--project-dir`    | _(required)_             | ArcSWAT project root (contains `Watershed/`, `Scenarios/`) |
+| `--update`         | _(required, repeatable)_ | `YEAR MONTH DAY /path/to/nlcd.tif`                         |
+| `--lookup-table`   | auto-detected            | NLCD code → SWAT code mapping (`luc.txt`)                  |
+| `--output-dir`     | `../output`              | Where to write `lup.dat` and `fileN.dat`                   |
+| `--method`         | `auto`                   | `auto`, `raster`, `shapefile`, or `both`                   |
+| `--verbose` / `-v` | off                      | Enable DEBUG logging                                       |
 
 #### Python API
 
@@ -129,18 +131,216 @@ results = run_luc(config)
 
 #### Output files
 
-| File | Description |
-|---|---|
-| `output/lup.dat` | Update schedule read by SWAT (`UPDATE_NUM MONTH DAY YEAR FILENAME`) |
-| `output/file1.dat` | HRU fractional areas for update 1 (CSV: `HRU_ID, HRU_AREA`) |
-| `output/file2.dat` | HRU fractional areas for update 2 |
-| `output/luc_summary_report.txt` | Land use change summary per subbasin |
-| `output/method_comparison.csv` | Side-by-side raster vs shapefile comparison (method=`both`) |
+| File                            | Description                                                         |
+| ------------------------------- | ------------------------------------------------------------------- |
+| `output/lup.dat`                | Update schedule read by SWAT (`UPDATE_NUM MONTH DAY YEAR FILENAME`) |
+| `output/file1.dat`              | HRU fractional areas for update 1 (CSV: `HRU_ID, HRU_AREA`)         |
+| `output/file2.dat`              | HRU fractional areas for update 2                                   |
+| `output/luc_summary_report.txt` | Land use change summary per subbasin                                |
+| `output/method_comparison.csv`  | Side-by-side raster vs shapefile comparison (method=`both`)         |
 
 #### Enabling LUC in SWAT
 
 After generating the output files, copy them to `TxtInOut/`. The `lup.dat` must reference the correct
 filenames (`file1.dat`, `file2.dat`, …).
+
+---
+
+### `swatpytools.simulation` — Multi-Simulation Runner
+
+Runs ensembles of SWAT simulations by varying parameters across a Latin
+Hypercube sample set. Designed for post-calibration use: parameter ranges
+come from SWAT-CUP (or equivalent) final calibrated bounds, and the module
+executes all simulations in parallel and collects output files for
+post-processing.
+
+Typical use cases:
+
+- **Uncertainty analysis** — quantify output variability across the calibrated
+  parameter space
+- **Sensitivity analysis** — identify which parameters drive output variance
+- **Scenario ensembles** — compare multiple plausible parameter sets
+
+#### Parameter change methods
+
+| Code  | Method               | Formula                                    |
+| ----- | -------------------- | ------------------------------------------ |
+| `"v"` | Absolute replacement | `new_value = sample`                       |
+| `"r"` | Relative change      | `new_value = (1 + sample) × initial_value` |
+
+Both methods clamp the result to `[abs_min, abs_max]` physical bounds.
+
+#### CLI usage
+
+```bash
+# Step 1 — generate samples and save to CSV
+python -m swatpytools.simulation sample --config simulation_config.json
+
+# Step 2 — run all simulations in parallel
+python -m swatpytools.simulation run --config simulation_config.json --workers 8
+
+# Check progress at any time
+python -m swatpytools.simulation status --results-dir ./simulation_results
+```
+
+#### Config file format
+
+Save as `simulation_config.json`:
+
+```json
+{
+  "source_txtinout": "./ArcSWAT_Project/Scenarios/Default/TxtInOut",
+  "n_simulations": 500,
+  "seed": 42,
+  "max_workers": 8,
+  "delete_run_dirs": true,
+  "work_dir": "./simulation_runs",
+  "results_dir": "./simulation_results",
+  "swat_exe_name": "swat.exe",
+  "timeout": null,
+  "resume": true,
+  "output_files": ["output.rch", "output.sub", "output.std", "watout.dat"],
+  "parameters": [
+    {
+      "name": "CN2",
+      "extension": "mgt",
+      "method": "r",
+      "lower": -0.09,
+      "upper": 0.2,
+      "abs_min": 35,
+      "abs_max": 98
+    },
+    {
+      "name": "GW_REVAP",
+      "extension": "gw",
+      "method": "v",
+      "lower": 0.01,
+      "upper": 0.2,
+      "abs_min": 0.02,
+      "abs_max": 0.2
+    },
+    {
+      "name": "ESCO",
+      "extension": "hru",
+      "method": "v",
+      "lower": 0.0,
+      "upper": 1.0,
+      "abs_min": 0.0,
+      "abs_max": 1.0
+    },
+    {
+      "name": "CH_N2",
+      "extension": "rte",
+      "method": "v",
+      "lower": 0.01,
+      "upper": 0.1,
+      "abs_min": -0.01,
+      "abs_max": 0.3
+    },
+    {
+      "name": "CH_K2",
+      "extension": "rte",
+      "method": "v",
+      "lower": 60.0,
+      "upper": 102.0,
+      "abs_min": 60.0,
+      "abs_max": 500.0
+    },
+    {
+      "name": "ALPHA_BNK",
+      "extension": "rte",
+      "method": "v",
+      "lower": 0.2,
+      "upper": 1.0,
+      "abs_min": 0.0,
+      "abs_max": 1.0
+    },
+    {
+      "name": "SOL_AWC",
+      "extension": "sol",
+      "method": "r",
+      "lower": -0.2,
+      "upper": 0.1,
+      "abs_min": 0.0,
+      "abs_max": 1.0
+    },
+    {
+      "name": "HRU_SLP",
+      "extension": "hru",
+      "method": "r",
+      "lower": -0.5,
+      "upper": -0.1,
+      "abs_min": 0.0,
+      "abs_max": 1.0
+    }
+  ]
+}
+```
+
+#### Python API
+
+```python
+from swatpytools.simulation import (
+    ParameterSpec, SimulationConfig,
+    generate_samples, run_simulations,
+)
+
+params = [
+    ParameterSpec.from_swatcup_id("CN2.mgt",       "r", -0.09, 0.20, 35, 98),
+    ParameterSpec.from_swatcup_id("GW_REVAP.gw",   "v",  0.01, 0.20, 0.02, 0.20),
+    ParameterSpec.from_swatcup_id("ESCO.hru",       "v",  0.00, 1.00, 0.00, 1.00),
+    ParameterSpec.from_swatcup_id("SOL_AWC.sol",    "r", -0.20, 0.10, 0.00, 1.00),
+    # ... add remaining parameters
+]
+
+config = SimulationConfig(
+    source_txtinout="./ArcSWAT_Project/Scenarios/Default/TxtInOut",
+    parameters=params,
+    n_simulations=500,
+    seed=42,
+    max_workers=8,
+    delete_run_dirs=True,      # saves disk space — removes run copies after each sim
+)
+
+# Optional: generate and inspect samples before running
+samples = generate_samples(config.parameters, config.n_simulations, config.seed)
+print(samples.head())
+
+# Run all simulations
+log = run_simulations(config, samples)
+print(log["status"].value_counts())
+```
+
+#### Output structure
+
+```
+simulation_results/
+├── simulation_config.json   # Full config for exact reproducibility
+├── samples.csv              # LHS parameter values (sim_id → param values)
+├── params_manifest.csv      # Human-readable copy of samples.csv
+├── run_log.csv              # sim_id, status, duration_s, error per run
+├── sim_0000/
+│   ├── output.rch           # Reach-level output (streamflow, sediment, nutrients)
+│   ├── output.sub           # Subbasin water balance
+│   ├── output.std           # Standard output summary
+│   └── watout.dat           # Watershed water balance
+├── sim_0001/
+│   └── ...
+└── sim_0499/
+    └── ...
+```
+
+Use `swatpytools.outputs.read_reach` and `read_subbasin` to load individual
+simulation results, and `swatpytools.metrics` to compute NSE/KGE/PBIAS across
+the ensemble.
+
+> **Disk space note:** Each SWAT simulation requires a full TxtInOut copy
+> (~1,337 files). Set `delete_run_dirs=True` (default) to remove each copy
+> immediately after output files are collected. Collected outputs are
+> typically 5–20 MB per simulation.
+
+> **Windows path length:** Keep `work_dir` near a drive root
+> (e.g. `C:/swat_runs/`) to avoid the 260-character Windows path limit.
 
 ---
 
@@ -168,19 +368,19 @@ df = read_reach(
 
 Returns a DataFrame with columns:
 
-| Column | Units | Description |
-|---|---|---|
-| `RCH` | — | Reach number |
-| `MON` | — | Month (1–12); 0 = annual summary |
-| `DATE` | — | First day of month (added when `start_date` is given) |
-| `AREA_km2` | km² | Drainage area |
-| `FLOW_IN` | m³/s | Flow entering reach |
-| `FLOW_OUT` | m³/s | Flow leaving reach |
-| `SED_IN` / `SED_OUT` | tons | Sediment in/out |
-| `SEDCONC` | mg/L | Sediment concentration |
-| `TOT_N` / `TOT_P` | kg | Total nitrogen / phosphorus |
-| `WTMP` | °C | Water temperature |
-| *(+ 50 more)* | | Nutrients, pesticides, bacteria, salts |
+| Column               | Units | Description                                           |
+| -------------------- | ----- | ----------------------------------------------------- |
+| `RCH`                | —     | Reach number                                          |
+| `MON`                | —     | Month (1–12); 0 = annual summary                      |
+| `DATE`               | —     | First day of month (added when `start_date` is given) |
+| `AREA_km2`           | km²   | Drainage area                                         |
+| `FLOW_IN`            | m³/s  | Flow entering reach                                   |
+| `FLOW_OUT`           | m³/s  | Flow leaving reach                                    |
+| `SED_IN` / `SED_OUT` | tons  | Sediment in/out                                       |
+| `SEDCONC`            | mg/L  | Sediment concentration                                |
+| `TOT_N` / `TOT_P`    | kg    | Total nitrogen / phosphorus                           |
+| `WTMP`               | °C    | Water temperature                                     |
+| _(+ 50 more)_        |       | Nutrients, pesticides, bacteria, salts                |
 
 ---
 
@@ -202,22 +402,22 @@ df = read_subbasin(
 
 Returns a DataFrame with columns:
 
-| Column | Units | Description |
-|---|---|---|
-| `SUB` | — | Subbasin number |
-| `MON` | — | Month (1–12); 13 = annual summary |
-| `AREA_ha` | ha | Subbasin area (decoded from SWAT's combined MON field) |
-| `DATE` | — | First day of month (added when `start_date` is given) |
-| `PRECIP` | mm | Precipitation |
-| `SNOWMELT` | mm | Snow melt |
-| `PET` / `ET` | mm | Potential / Actual evapotranspiration |
-| `SW` | mm | Soil water content |
-| `PERC` | mm | Percolation to shallow aquifer |
-| `SURQ` | mm | Surface runoff |
-| `GWQ` | mm | Groundwater contribution to streamflow |
-| `WYLD` | mm | Total water yield |
-| `SYLD` | t/ha | Sediment yield |
-| *(+ nutrient columns)* | | ORGN, ORGP, NO3, LATNO3, GWNO3, TNO3, … |
+| Column                 | Units | Description                                            |
+| ---------------------- | ----- | ------------------------------------------------------ |
+| `SUB`                  | —     | Subbasin number                                        |
+| `MON`                  | —     | Month (1–12); 13 = annual summary                      |
+| `AREA_ha`              | ha    | Subbasin area (decoded from SWAT's combined MON field) |
+| `DATE`                 | —     | First day of month (added when `start_date` is given)  |
+| `PRECIP`               | mm    | Precipitation                                          |
+| `SNOWMELT`             | mm    | Snow melt                                              |
+| `PET` / `ET`           | mm    | Potential / Actual evapotranspiration                  |
+| `SW`                   | mm    | Soil water content                                     |
+| `PERC`                 | mm    | Percolation to shallow aquifer                         |
+| `SURQ`                 | mm    | Surface runoff                                         |
+| `GWQ`                  | mm    | Groundwater contribution to streamflow                 |
+| `WYLD`                 | mm    | Total water yield                                      |
+| `SYLD`                 | t/ha  | Sediment yield                                         |
+| _(+ nutrient columns)_ |       | ORGN, ORGP, NO3, LATNO3, GWNO3, TNO3, …                |
 
 > **Note on MON encoding:** SWAT encodes the subbasin `MON` column as
 > `timestep × 1000 + area_ha` (e.g. `1121.99` = month 1, area 121.99 ha).
@@ -271,15 +471,15 @@ kge_val  = kge(sim, obs)
 bias_pct = pbias(sim, obs)   # positive = underestimate, negative = overestimate
 ```
 
-| Function | Range | Perfect | Acceptable (streamflow) |
-|---|---|---|---|
-| `nse` | (−∞, 1] | 1 | > 0.5 |
-| `kge` | (−∞, 1] | 1 | > 0.5 |
-| `pbias` | (−∞, +∞) | 0 | \|PBIAS\| < 25% |
-| `rmse` | [0, +∞) | 0 | — |
-| `mae` | [0, +∞) | 0 | — |
-| `r_squared` | [0, 1] | 1 | > 0.6 |
-| `index_of_agreement` | [0, 1] | 1 | > 0.65 |
+| Function             | Range    | Perfect | Acceptable (streamflow) |
+| -------------------- | -------- | ------- | ----------------------- |
+| `nse`                | (−∞, 1]  | 1       | > 0.5                   |
+| `kge`                | (−∞, 1]  | 1       | > 0.5                   |
+| `pbias`              | (−∞, +∞) | 0       | \|PBIAS\| < 25%         |
+| `rmse`               | [0, +∞)  | 0       | —                       |
+| `mae`                | [0, +∞)  | 0       | —                       |
+| `r_squared`          | [0, 1]   | 1       | > 0.6                   |
+| `index_of_agreement` | [0, 1]   | 1       | > 0.65                  |
 
 ---
 
@@ -525,7 +725,45 @@ print(annual.mean().round(1))
 
 ---
 
-### Example 4 — Batch calibration parameter change
+### Example 4 — Multi-simulation ensemble run
+
+```python
+from swatpytools.simulation import (
+    ParameterSpec, SimulationConfig, generate_samples, run_simulations,
+)
+
+# Define parameter space using SWAT-CUP final calibrated ranges
+params = [
+    ParameterSpec.from_swatcup_id("CN2.mgt",       "r", -0.09, 0.20, 35, 98),
+    ParameterSpec.from_swatcup_id("GW_REVAP.gw",   "v",  0.01, 0.20, 0.02, 0.20),
+    ParameterSpec.from_swatcup_id("ESCO.hru",       "v",  0.00, 1.00, 0.00, 1.00),
+    ParameterSpec.from_swatcup_id("CH_N2.rte",      "v",  0.01, 0.10, -0.01, 0.30),
+    ParameterSpec.from_swatcup_id("SOL_AWC.sol",    "r", -0.20, 0.10, 0.00, 1.00),
+]
+
+config = SimulationConfig(
+    source_txtinout="./ArcSWAT_Project/Scenarios/Default/TxtInOut",
+    parameters=params,
+    n_simulations=500,
+    seed=42,
+    max_workers=8,            # parallel SWAT processes
+    delete_run_dirs=True,     # remove TxtInOut copies after each run
+    results_dir="./simulation_results",
+)
+
+# Generate samples, then run
+samples = generate_samples(config.parameters, config.n_simulations, config.seed)
+log = run_simulations(config, samples)
+
+# Check results
+print(log["status"].value_counts())
+# completed    497
+# partial        3
+```
+
+---
+
+### Example 5 — Batch parameter update (single run)
 
 ```python
 from swatpytools.inputs.params import batch_update
@@ -542,7 +780,7 @@ for mgt in Path("TxtInOut/").glob("*.mgt"):
 
 ---
 
-### Example 5 — Export monthly ET to NetCDF for GIS/visualization
+### Example 6 — Export monthly ET to NetCDF for GIS/visualization
 
 ```python
 from swatpytools.outputs import read_subbasin
@@ -561,15 +799,19 @@ to_netcdf(
 )
 ```
 
+---
+
 ## Notes on SWAT Output Formats
 
 ### `output.rch` column alignment
+
 The header row has some columns concatenated without spaces (e.g.
 `SOLPST_INmgSOLPST_OUTmg`) and others with spaces in the name (`TOT Nkg`).
 `read_reach` uses hardcoded column names rather than parsing the header — do not
 rely on the raw header for column indexing.
 
 ### `output.sub` MON encoding
+
 SWAT stores the MON column in `output.sub` as a single float combining the
 timestep index and subbasin area:
 
@@ -583,6 +825,7 @@ MON_value = timestep * 1000 + area_ha
 column directly — use the decoded `MON` and `AREA_ha` columns instead.
 
 ### LUC module accuracy
+
 The raster method (pixel-level overlay) is more accurate than the shapefile
 method because it captures soil and slope variation within each HRU polygon,
 consistent with how SWAT originally delineated HRUs. Cross-method R² ≥ 0.999
