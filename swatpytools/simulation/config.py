@@ -153,6 +153,8 @@ class SimulationConfig:
     swat_exe_name: str = "swat.exe"
     timeout: int | None = None
     resume: bool = True
+    strategy: str = "rolling"
+    reach_filter: list[int] | None = None
 
     def __post_init__(self) -> None:
         self.source_txtinout = Path(self.source_txtinout)
@@ -160,6 +162,12 @@ class SimulationConfig:
         self.results_dir = Path(self.results_dir)
         if self.max_workers is None:
             self.max_workers = os.cpu_count() or 1
+        if self.strategy not in ("rolling", "persistent"):
+            raise ValueError(
+                f"strategy must be 'rolling' or 'persistent', got '{self.strategy}'"
+            )
+        if self.reach_filter is not None:
+            self.reach_filter = [int(r) for r in self.reach_filter]
 
     # ------------------------------------------------------------------
     # Validation
@@ -206,6 +214,8 @@ class SimulationConfig:
             "swat_exe_name": self.swat_exe_name,
             "timeout": self.timeout,
             "resume": self.resume,
+            "strategy": self.strategy,
+            "reach_filter": self.reach_filter,
         }
 
     @classmethod
@@ -215,6 +225,8 @@ class SimulationConfig:
         d["source_txtinout"] = Path(d["source_txtinout"])
         d["work_dir"] = Path(d["work_dir"])
         d["results_dir"] = Path(d["results_dir"])
+        d.setdefault("strategy", "rolling")  # backwards-compatible with old JSON configs
+        d.setdefault("reach_filter", None)
         return cls(**d)
 
     def to_json(self, path: str | Path) -> Path:

@@ -137,12 +137,54 @@ def update_param(
     )
 
 
+def get_hrus_by_landuse(
+    txtinout_dir: str | Path,
+    landuse_codes: list[str],
+) -> list[int]:
+    """Return HRU numbers whose land use class matches any of *landuse_codes*.
+
+    Reads the header line of every ``.hru`` file in *txtinout_dir* and
+    extracts the ``Luse:XXXX`` token written by ArcSWAT.  Matching is
+    case-insensitive.
+
+    Args:
+        txtinout_dir: Path to the TxtInOut directory.
+        landuse_codes: Land use class codes to match, e.g. ``["AGRR"]``.
+
+    Returns:
+        Sorted list of integer HRU numbers (last 4 digits of the file stem)
+        for all HRU files whose land use matches.
+
+    Example::
+
+        hru_ids = get_hrus_by_landuse("./TxtInOut", ["AGRR"])
+        batch_update("./TxtInOut", "mgt", {"TDRAIN": 1}, hru_filter=hru_ids)
+    """
+    txtinout_dir = Path(txtinout_dir)
+    target = {c.upper() for c in landuse_codes}
+    _luse_re = re.compile(r"Luse:(\w+)", re.IGNORECASE)
+
+    matched: list[int] = []
+    for hru_file in sorted(txtinout_dir.glob("*.hru")):
+        with hru_file.open() as f:
+            header = f.readline()
+        m = _luse_re.search(header)
+        if m and m.group(1).upper() in target:
+            matched.append(int(hru_file.stem[-4:]))
+
+    logger.info(
+        "get_hrus_by_landuse(%s): %d HRU(s) matched", landuse_codes, len(matched)
+    )
+    return matched
+
+
 def batch_update(
     txtinout_dir: str | Path,
     extension: str,
     updates: dict[str, Any],
     *,
     hru_filter: list[int] | None = None,
+    landuse_filter: list[str] | None = None,
     dry_run: bool = False,
 ) -> list[Path]:
     """Apply parameter updates to all SWAT files with the given extension.
@@ -153,6 +195,11 @@ def batch_update(
         updates: Dict of {param_name: new_value} to apply.
         hru_filter: If provided, only update files whose HRU number (last 4
             digits of the stem) is in this list.
+        landuse_filter: If provided, only update files whose land use class
+            (from the ``.hru`` header ``Luse:XXXX`` token) matches any of
+            these codes, e.g. ``["AGRR"]``.  Case-insensitive.  When both
+            *hru_filter* and *landuse_filter* are given, only HRUs that
+            satisfy both are updated (intersection).
         dry_run: If True, log what would change but don't write any files.
 
     Returns:
@@ -166,6 +213,10 @@ def batch_update(
         raise FileNotFoundError(
             f"No .{ext} files found in {txtinout_dir}"
         )
+
+    if landuse_filter is not None:
+        luse_hrus = set(get_hrus_by_landuse(txtinout_dir, landuse_filter))
+        hru_filter = sorted(luse_hrus & set(hru_filter)) if hru_filter is not None else sorted(luse_hrus)
 
     if hru_filter is not None:
         hru_set = set(hru_filter)
@@ -206,6 +257,8 @@ def _format_value(value: Any, original_field: str) -> str:
     else:
         formatted = str(value)
 
-    # Right-align within original field width, pad with spaces
-    padded = formatted.rjust(field_width - 4).ljust(field_width - 4)
-    return f"    {padded}"
+    # Right-align value in (field_width - 4) chars, then append 4 trailing spaces.
+    # The 4 trailing spaces are critical: they separate the value from the '|'
+    # pipe character that follows, which SWAT's Fortran list-directed I/O reader
+    # cannot parse as a numeric separator if it immediately follows the value.
+    return formatted.rjust(field_width - 4) + "    "

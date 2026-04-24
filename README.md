@@ -160,6 +160,15 @@ Typical use cases:
 - **Sensitivity analysis** — identify which parameters drive output variance
 - **Scenario ensembles** — compare multiple plausible parameter sets
 
+#### Parallelisation strategies
+
+| Strategy | `strategy` value | How it works | Best for |
+| --- | --- | --- | --- |
+| Rolling (default) | `"rolling"` | Each simulation gets a fresh TxtInOut copy; up to `max_workers` copies exist simultaneously; each is deleted after outputs are collected | Full isolation; small ensembles or limited disk space |
+| Persistent | `"persistent"` | Exactly `max_workers` copies created upfront; each worker runs its assigned batch of simulations sequentially in-place | Large ensembles (e.g. 500 sims) where copy/delete overhead is significant |
+
+The persistent strategy eliminates per-simulation `copytree`/`rmtree` calls — with 500 simulations and 5 workers, copy operations drop from 500 to 5. Parameter baselines for `method='r'` parameters are pre-read once per worker copy at startup, preventing compounding changes across sequential runs in the same directory.
+
 #### Parameter change methods
 
 | Code  | Method               | Formula                                    |
@@ -198,7 +207,9 @@ Save as `simulation_config.json`:
   "swat_exe_name": "swat.exe",
   "timeout": null,
   "resume": true,
+  "strategy": "rolling",
   "output_files": ["output.rch", "output.sub", "output.std", "watout.dat"],
+  "reach_filter": [5, 12, 25],
   "parameters": [
     {
       "name": "CN2",
@@ -299,6 +310,7 @@ config = SimulationConfig(
     seed=42,
     max_workers=8,
     delete_run_dirs=True,      # saves disk space — removes run copies after each sim
+    strategy="rolling",        # "rolling" (default) or "persistent"
 )
 
 # Optional: generate and inspect samples before running
@@ -310,6 +322,30 @@ log = run_simulations(config, samples)
 print(log["status"].value_counts())
 ```
 
+#### Reach extraction (`reach_filter`)
+
+By default the full `output.rch` (~5–20 MB per simulation) is copied to each
+result directory.  For large ensembles with many reaches, set `reach_filter` to
+save only the rows you need as a compact CSV instead:
+
+```json
+"reach_filter": [5, 12, 25]
+```
+
+When `reach_filter` is set:
+
+- `output.rch` is **not** copied to the result directory.
+- Instead, a `reach_extract.csv` is written containing only rows for the
+  specified reach IDs (all columns preserved, both monthly and annual rows
+  matching the file as-is).
+- All other `output_files` (`output.sub`, `output.std`, `watout.dat`) are
+  copied as normal.
+- Resume logic correctly detects `reach_extract.csv` when deciding whether a
+  simulation is already complete.
+
+Old config files without `reach_filter` continue to work unchanged (the field
+defaults to `null`, which preserves the original copy-full-file behaviour).
+
 #### Output structure
 
 ```
@@ -319,7 +355,8 @@ simulation_results/
 ├── params_manifest.csv      # Human-readable copy of samples.csv
 ├── run_log.csv              # sim_id, status, duration_s, error per run
 ├── sim_0000/
-│   ├── output.rch           # Reach-level output (streamflow, sediment, nutrients)
+│   ├── reach_extract.csv    # Filtered reach output (when reach_filter is set)
+│   │   OR output.rch        # Full reach output (when reach_filter is null)
 │   ├── output.sub           # Subbasin water balance
 │   ├── output.std           # Standard output summary
 │   └── watout.dat           # Watershed water balance
@@ -333,10 +370,27 @@ Use `swatpytools.outputs.read_reach` and `read_subbasin` to load individual
 simulation results, and `swatpytools.metrics` to compute NSE/KGE/PBIAS across
 the ensemble.
 
-> **Disk space note:** Each SWAT simulation requires a full TxtInOut copy
-> (~1,337 files). Set `delete_run_dirs=True` (default) to remove each copy
-> immediately after output files are collected. Collected outputs are
-> typically 5–20 MB per simulation.
+To load `reach_extract.csv` from an ensemble:
+
+```python
+import pandas as pd
+from pathlib import Path
+
+results_dir = Path("./simulation_results")
+frames = []
+for sim_dir in sorted(results_dir.glob("sim_????/")):
+    df = pd.read_csv(sim_dir / "reach_extract.csv")
+    df["sim_id"] = int(sim_dir.name.split("_")[1])
+    frames.append(df)
+ensemble = pd.concat(frames, ignore_index=True)
+```
+
+> **Disk space note:** Each TxtInOut copy is ~1,337 files. With
+> `strategy="rolling"` (default), one copy is created and deleted per
+> simulation — peak disk usage is `max_workers` copies at any time. With
+> `strategy="persistent"`, exactly `max_workers` copies are created upfront
+> and reused for the entire run, then deleted when `delete_run_dirs=True`.
+> Collected outputs per simulation are typically 5–20 MB.
 
 > **Windows path length:** Keep `work_dir` near a drive root
 > (e.g. `C:/swat_runs/`) to avoid the 260-character Windows path limit.
@@ -748,13 +802,27 @@ config = SimulationConfig(
     max_workers=8,            # parallel SWAT processes
     delete_run_dirs=True,     # remove TxtInOut copies after each run
     results_dir="./simulation_results",
+    strategy="rolling",       # default: fresh copy per simulation
 )
 
-# Generate samples, then run
-samples = generate_samples(config.parameters, config.n_simulations, config.seed)
-log = run_simulations(config, samples)
+# Alternatively, use the persistent strategy to reduce copy overhead.
+# 8 worker copies are created upfront; each runs 500/8 ≈ 63 simulations in-place.
+# strategy="persistent" cuts copytree calls from 500 → 8 for a 500-sim run.
+config_fast = SimulationConfig(
+    source_txtinout="./ArcSWAT_Project/Scenarios/Default/TxtInOut",
+    parameters=params,
+    n_simulations=500,
+    seed=42,
+    max_workers=8,
+    delete_run_dirs=True,
+    results_dir="./simulation_results_persistent",
+    strategy="persistent",
+)
 
-# Check results
+# Generate samples once — reuse across both strategies for a fair comparison
+samples = generate_samples(config.parameters, config.n_simulations, config.seed)
+
+log = run_simulations(config, samples)
 print(log["status"].value_counts())
 # completed    497
 # partial        3
@@ -827,6 +895,4 @@ column directly — use the decoded `MON` and `AREA_ha` columns instead.
 
 The raster method (pixel-level overlay) is more accurate than the shapefile
 method because it captures soil and slope variation within each HRU polygon,
-consistent with how SWAT originally delineated HRUs. Cross-method R² ≥ 0.999
-has been observed for this watershed, but the two methods can diverge by up to
-~2.7 percentage points for individual HRUs in a given update year.
+consistent with how SWAT originally delineated HRUs.

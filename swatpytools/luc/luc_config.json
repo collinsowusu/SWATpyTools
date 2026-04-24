@@ -1,0 +1,10 @@
+{
+  "project_dir": "./ArcSWAT_Project",
+  "method": "auto",
+  "output_dir": "./output",
+  "lookup_table": "./Tables/luc.txt",
+  "updates": [
+    {"year": 2016, "month": 1, "day": 1, "raster": "./Landuse_Rasters/NLCD_2016_PRJ.tif"},
+    {"year": 2019, "month": 1, "day": 1, "raster": "./Landuse_Rasters/NLCD_2019_NEW.tif"}
+  ]
+}

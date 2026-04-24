@@ -1,0 +1,7 @@
+{
+  "soil_dir": "./Soils/SSURGO",
+  "output_path": "./ArcSWAT_Project/Watershed/Grid/soil_mukey.tif",
+  "crs": "EPSG:32616",
+  "resolution": 30.0,
+  "mosaic": true
+}

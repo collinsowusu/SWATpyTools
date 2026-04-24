@@ -1,6 +1,24 @@
-"""Command-line interface for SWAT LUC file generation."""
+"""Command-line interface for SWAT LUC file generation.
+
+Supports both individual flags and a JSON config file.  Individual flags
+always take precedence over config file values.
+
+Config file format (``luc_config.json``)::
+
+    {
+      "project_dir":   "./ArcSWAT_Project",
+      "method":        "auto",
+      "output_dir":    "./output",
+      "lookup_table":  "./Tables/luc.txt",
+      "updates": [
+        {"year": 2016, "month": 1, "day": 1, "raster": "./Landuse_Rasters/NLCD_2016_PRJ.tif"},
+        {"year": 2019, "month": 1, "day": 1, "raster": "./Landuse_Rasters/NLCD_2019_NEW.tif"}
+      ]
+    }
+"""
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -21,20 +39,29 @@ from .writers import write_lup_dat
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="SWAT Land Use Change (LUC) File Generator",
-        epilog="Generates lup.dat and HRU fraction files for SWAT's dynamic land use change module.",
+        epilog=(
+            "Generates lup.dat and HRU fraction files for SWAT's dynamic land use change module.\n\n"
+            "Supply either --config (JSON file) or individual flags.\n"
+            "Individual flags always override values from --config."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--project-dir", required=True, type=Path,
+        "--config", type=Path, default=None, metavar="JSON",
+        help="JSON config file with all LUC settings (individual flags override)",
+    )
+    parser.add_argument(
+        "--project-dir", default=None, type=Path,
         help="Path to the ArcSWAT project directory (contains Watershed/, Scenarios/)",
     )
     parser.add_argument(
-        "--method", choices=["raster", "shapefile", "both", "auto"], default="auto",
-        help="Spatial overlay method (default: auto — uses raster if grids exist, else shapefile)",
+        "--method", choices=["raster", "shapefile", "both", "auto"], default=None,
+        help="Spatial overlay method (default: auto)",
     )
     parser.add_argument(
         "--update", action="append", nargs=4,
         metavar=("YEAR", "MONTH", "DAY", "RASTER_PATH"),
-        help="Land use update: YEAR MONTH DAY /path/to/nlcd.tif (repeatable)",
+        help="Land use update: YEAR MONTH DAY /path/to/nlcd.tif (repeatable, overrides config)",
     )
     parser.add_argument(
         "--lookup-table", type=Path, default=None,
@@ -59,23 +86,45 @@ def main(argv=None):
         datefmt="%H:%M:%S",
     )
 
-    if not args.update:
-        parser.error("At least one --update is required")
+    # ---- Load JSON config, then let CLI flags override ----------------
+    cfg: dict = {}
+    if args.config:
+        if not args.config.exists():
+            parser.error(f"Config file not found: {args.config}")
+        with open(args.config) as f:
+            cfg = json.load(f)
+        logging.info("Loaded config from %s", args.config)
+
+    project_dir = args.project_dir or (Path(cfg["project_dir"]) if "project_dir" in cfg else None)
+    method      = args.method      or cfg.get("method", "auto")
+    output_dir  = args.output_dir  or (Path(cfg["output_dir"]) if "output_dir" in cfg else None)
+    lookup_arg  = args.lookup_table or (Path(cfg["lookup_table"]) if "lookup_table" in cfg else None)
+
+    # CLI --update overrides config updates entirely (or use config updates)
+    raw_updates = args.update or [
+        (str(u["year"]), str(u["month"]), str(u["day"]), u["raster"])
+        for u in cfg.get("updates", [])
+    ]
+
+    if project_dir is None:
+        parser.error("--project-dir is required (or provide 'project_dir' in --config)")
+    if not raw_updates:
+        parser.error("At least one update is required (--update flag or 'updates' in --config)")
 
     # Parse update rasters
     update_rasters = []
-    for year_s, month_s, day_s, raster_path in args.update:
+    for year_s, month_s, day_s, raster_path in raw_updates:
         update_rasters.append((
             int(year_s), int(month_s), int(day_s), Path(raster_path)
         ))
 
     # Build configuration
-    lookup_path = args.lookup_table
+    lookup_path = lookup_arg
     if lookup_path is None:
         # Try to auto-detect
         candidates = [
-            args.project_dir.parent / "Tables" / "luc.txt",
-            args.project_dir / "Tables" / "luc.txt",
+            project_dir.parent / "Tables" / "luc.txt",
+            project_dir / "Tables" / "luc.txt",
         ]
         for candidate in candidates:
             if candidate.exists():
@@ -85,11 +134,11 @@ def main(argv=None):
             parser.error("Could not auto-detect lookup table. Use --lookup-table.")
 
     config = LUCConfig.from_project_dir(
-        project_dir=args.project_dir,
+        project_dir=project_dir,
         lookup_table_path=lookup_path,
         update_rasters=update_rasters,
-        output_dir=args.output_dir,
-        method=args.method,
+        output_dir=output_dir,
+        method=method,
         output_style="swat2009",
     )
 

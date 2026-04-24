@@ -220,6 +220,8 @@ def _cmd_status(args: argparse.Namespace) -> None:
         return
 
     log = pd.read_csv(log_path)
+    log["sim_id"] = log["sim_id"].astype(int)
+    log = log.drop_duplicates(subset="sim_id", keep="last")
     counts = log["status"].value_counts()
 
     samples_path = results_dir / "samples.csv"

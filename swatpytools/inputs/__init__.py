@@ -1,6 +1,10 @@
 """SWAT input preparation utilities."""
-from .soil import prepare_soil_raster
-from .params import batch_update, read_param_file, update_param, write_param_file
+from .params import batch_update, get_hrus_by_landuse, read_param_file, update_param, write_param_file
+
+try:
+    from .soil import prepare_soil_raster
+except ImportError:
+    pass
 
 __all__ = [
     "prepare_soil_raster",
@@ -8,4 +12,5 @@ __all__ = [
     "write_param_file",
     "update_param",
     "batch_update",
+    "get_hrus_by_landuse",
 ]

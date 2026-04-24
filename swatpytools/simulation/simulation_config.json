@@ -1,0 +1,25 @@
+{
+  "source_txtinout": "./ArcSWAT_Project/Scenarios/Default/TxtInOut",
+  "n_simulations": 500,
+  "seed": 42,
+  "max_workers": 4,
+  "delete_run_dirs": true,
+  "work_dir": "./simulation_runs",
+  "results_dir": "./simulation_results",
+  "swat_exe_name": "swat.exe",
+  "timeout": null,
+  "resume": true,
+  "strategy": "rolling",
+  "reach_filter": null,
+  "output_files": ["output.rch", "output.sub", "output.std", "watout.dat"],
+  "parameters": [
+    {"name": "CN2",       "extension": "mgt", "method": "r", "lower": -0.09, "upper":  0.20, "abs_min": 35.0, "abs_max":  98.0},
+    {"name": "GW_REVAP", "extension": "gw",  "method": "v", "lower":  0.01, "upper":  0.20, "abs_min":  0.02, "abs_max":   0.20},
+    {"name": "ESCO",     "extension": "hru", "method": "v", "lower":  0.00, "upper":  1.00, "abs_min":  0.00, "abs_max":   1.00},
+    {"name": "CH_N2",    "extension": "rte", "method": "v", "lower":  0.01, "upper":  0.10, "abs_min": -0.01, "abs_max":   0.30},
+    {"name": "CH_K2",    "extension": "rte", "method": "v", "lower": 60.0,  "upper": 102.0, "abs_min": 60.0,  "abs_max": 500.0},
+    {"name": "ALPHA_BNK","extension": "rte", "method": "v", "lower":  0.20, "upper":  1.00, "abs_min":  0.00, "abs_max":   1.00},
+    {"name": "SOL_AWC",  "extension": "sol", "method": "r", "lower": -0.20, "upper":  0.10, "abs_min":  0.00, "abs_max":   1.00},
+    {"name": "HRU_SLP",  "extension": "hru", "method": "r", "lower": -0.50, "upper": -0.10, "abs_min":  0.00, "abs_max":   1.00}
+  ]
+}
